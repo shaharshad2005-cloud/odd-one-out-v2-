@@ -739,8 +739,9 @@ function fail(t){cleanupVoice();msg=t;connecting=false;if(peer){try{peer.destroy
 function resetPeer(){cleanupVoice();ph='join';if(conn){try{conn.close()}catch(e){}}if(peer){try{peer.destroy()}catch(e){}}conn=null;peer=null}
 function saveHostBackup(){
  if(!isHost||!H||!code)return;
- try{const clean=JSON.parse(JSON.stringify(H,(k,v)=>{if(k==='conn'||k==='pending'||k==='voteShowTimer')return undefined;if(typeof v==='function')return undefined;return v;}));localStorage.setItem(HOST_KEY,JSON.stringify({code,state:clean,cfg,at:Date.now()}));}catch(e){}
+ try{const clean=JSON.parse(JSON.stringify(H,(k,v)=>{if(k==='conn'||k==='pending'||k==='voteShowTimer')return undefined;if(typeof v==='function')return undefined;return v;}));localStorage.setItem(HOST_KEY,JSON.stringify({code,state:clean,cfg,at:Date.now()}));try{window.oooCloud&&oooCloud.save(code,{code,state:clean,cfg,at:Date.now()})}catch(e){}}catch(e){}
 }
+function cloudSnapshot(){try{const clean=JSON.parse(JSON.stringify(H,(k,v)=>{if(k==='conn'||k==='pending'||k==='voteShowTimer')return undefined;if(typeof v==='function')return undefined;return v;}));return {code,state:clean,cfg,at:Date.now()}}catch(e){return {code,cfg,at:Date.now()}}}
 function clearRoomBackup(){try{localStorage.removeItem(HOST_KEY);localStorage.removeItem(ROOM_KEY)}catch(e){}}
 function hostRoom(n,restore){
  resetPeer();
@@ -749,7 +750,7 @@ function hostRoom(n,restore){
  H={players:{host:{name:nm,conn:null,avatar:selectedAvatar,resumeToken:playerToken}},lobbyReady:{host:true},pending:{},peerAliases:{},ph:'lobby',round:null,votes:{},ready:{},forceAvailable:false,forceOffered:false,voteShowTimer:null,scores:{host:0},scoreNames:{host:nm},scoreRounds:0};scoreboardData=scoreSnapshot();
  if(restore&&restore.state){try{H=restore.state;H.pending={};H.peerAliases={};Object.values(H.players||{}).forEach(p=>p.conn=null);H.players.host=H.players.host||{name:nm,avatar:selectedAvatar,resumeToken:playerToken};H.players.host.conn=null;H.lobbyReady=H.lobbyReady||{};H.lobbyReady.host=true;Object.keys(H.players).forEach(id=>{if(H.lobbyReady[id]===undefined)H.lobbyReady[id]=false});cfg={...cfg,...(restore.cfg||{})};H.ph='lobby';H.round=null;H.mafia=null;H.nameHunt=null;H.votes={};H.ready={};H.lobbyReady=H.lobbyReady||{};H.lobbyReady.host=true;Object.keys(H.players).forEach(id=>{if(H.lobbyReady[id]===undefined)H.lobbyReady[id]=false});H.voteShowTimer=null;ph='lobby';scoreboardData=scoreSnapshot();}catch(e){return fail('Saved room backup could not be restored.')}}
  try{peer=new Peer(PFX+code)}catch(e){return fail('Connection setup fail hua')}
- peer.on('open',()=>{try{localStorage.setItem(ROOM_KEY,JSON.stringify({code,name:me.name,avatar:selectedAvatar,token:playerToken,role:'host'}))}catch(e){}if(backupTimer)clearInterval(backupTimer);saveHostBackup();backupTimer=setInterval(saveHostBackup,1500);myId='host';if(H.players.host)H.players.host.peerId=peer.id;connecting=false;ph='lobby';render();voicePeerUpdated()});
+ peer.on('open',()=>{try{localStorage.setItem(ROOM_KEY,JSON.stringify({code,name:me.name,avatar:selectedAvatar,token:playerToken,role:'host'}))}catch(e){}if(backupTimer)clearInterval(backupTimer);saveHostBackup();backupTimer=setInterval(saveHostBackup,1500);try{window.oooCloud&&oooCloud.hostStart(code,cloudSnapshot())}catch(e){}myId='host';if(H.players.host)H.players.host.peerId=peer.id;connecting=false;ph='lobby';render();voicePeerUpdated()});
  peer.on('call',voiceHandleIncoming);
  peer.on('connection',c=>{
   H.pending[c.peer]=c;
@@ -773,7 +774,7 @@ function joinRoom(c0){
  peer.on('open',()=>{
   peer.on('call',voiceHandleIncoming);
   conn=peer.connect(PFX+c1,{reliable:true});
-  conn.on('open',()=>{clearTimeout(timer);connecting=false;try{localStorage.setItem(ROOM_KEY,JSON.stringify({code:c1,name:me.name,avatar:selectedAvatar,token:playerToken,role:'player'}))}catch(e){}conn.send({t:'join',name:me.name.trim().slice(0,14)||'Player',peerId:peer.id,avatar:selectedAvatar,resumeToken:playerToken});ph='lobby';render()});
+  conn.on('open',()=>{clearTimeout(timer);connecting=false;try{localStorage.setItem(ROOM_KEY,JSON.stringify({code:c1,name:me.name,avatar:selectedAvatar,token:playerToken,role:'player'}))}catch(e){}conn.send({t:'join',name:me.name.trim().slice(0,14)||'Player',peerId:peer.id,avatar:selectedAvatar,resumeToken:playerToken});try{window.oooCloud&&oooCloud.join(c1)}catch(e){}ph='lobby';render()});
   conn.on('error',()=>{clearTimeout(timer);fail('Room se connection nahi ho paya. Code check karke dobara try karo.')});
   conn.on('data',onMsg);
   conn.on('close',()=>{if(ph!='join'){fail('Host se connection toot gaya. Dobara join karo.')}});
@@ -1014,7 +1015,7 @@ function rResult(){
  else app.append(el('p','note','Host dobara shuru karega...'));
 }
 render();
-setTimeout(()=>{let room=null;try{room=JSON.parse(localStorage.getItem(ROOM_KEY)||'null')}catch(e){}if(!room||!room.code)return;if(room.role==='host'){let backup=null;try{backup=JSON.parse(localStorage.getItem(HOST_KEY)||'null')}catch(e){}if(backup&&backup.code===room.code&&confirm('Restore your previous host room? The saved room state and scores will be loaded.')){me.name=room.name||me.name;selectedAvatar=room.avatar||selectedAvatar;playerToken=room.token||playerToken;connecting=true;ph='join';render();hostRoom(0,backup);}}else if(confirm('Rejoin your previous room '+String(room.code).toUpperCase()+'?')){me.name=room.name||me.name;selectedAvatar=room.avatar||selectedAvatar;playerToken=room.token||playerToken;inCode=room.code;connecting=true;ph='join';render();joinRoom(room.code);}},500);
+setTimeout(()=>{let room=null;try{room=JSON.parse(localStorage.getItem(ROOM_KEY)||'null')}catch(e){}if(!room||!room.code)return;if(room.role==='host'){let backup=null;try{backup=JSON.parse(localStorage.getItem(HOST_KEY)||'null')}catch(e){}if(backup&&backup.code===room.code&&confirm('Restore your previous host room? The saved room state and scores will be loaded.')){me.name=room.name||me.name;selectedAvatar=room.avatar||selectedAvatar;playerToken=room.token||playerToken;connecting=true;ph='join';render();hostRoom(0,backup);}else if(!backup&&window.oooCloud){oooCloud.recover(room.code).then(b=>{if(b&&b.state&&confirm('Restore your cloud-saved host room? The saved room state and scores will be loaded.')){me.name=room.name||me.name;selectedAvatar=room.avatar||selectedAvatar;playerToken=room.token||playerToken;connecting=true;ph='join';render();hostRoom(0,{...b,code:room.code});}}).catch(()=>{})}}else if(confirm('Rejoin your previous room '+String(room.code).toUpperCase()+'?')){me.name=room.name||me.name;selectedAvatar=room.avatar||selectedAvatar;playerToken=room.token||playerToken;inCode=room.code;connecting=true;ph='join';render();joinRoom(room.code);}},500);
 window.addEventListener('beforeunload',e=>{if(isHost&&H&&Object.keys(H.players||{}).length>1){e.preventDefault();e.returnValue='The host room will close if you leave. Are you sure?';return e.returnValue;}});
 </script>
 <!-- Supabase guest authentication + Socket.IO connection layer. Existing PeerJS gameplay is preserved. -->
@@ -1045,6 +1046,144 @@ window.addEventListener('beforeunload',e=>{if(isHost&&H&&Object.keys(H.players||
    socket.on('room:host-changed',payload=>window.dispatchEvent(new CustomEvent('ooo-host-changed',{detail:payload})));
    window.oddOneOutBackend.socket=socket;
  }
+ // ---------- Cloud bridge: connects the existing PeerJS game to Supabase/Socket.IO backend ----------
+ const wait=ms=>new Promise(r=>setTimeout(r,ms));
+ const cloud={active:null,created:null,lastStr:'',lastAt:0,pending:null,timer:null,wasConnected:false,profile:null,pendingRequests:0};
+ async function whenConnected(ms){const t0=Date.now();while(Date.now()-t0<ms){if(socket&&socket.connected&&window.oddOneOutBackend&&window.oddOneOutBackend.createCloudRoom)return true;await wait(500)}return false}
+ function normSnap(r){const s=r&&(r.snapshot||(r.room&&r.room.snapshot)||r.state);if(!s)return null;if(s.state&&typeof s.state==='object')return s;if(s.players)return{code:r.code||(r.room&&r.room.code)||s.code,state:s,cfg:s.cfg||{},at:Date.now()};return null}
+ function flushSave(){
+   cloud.timer=null;const snap=cloud.pending;if(!snap||!cloud.created||!socket||!socket.connected)return;cloud.pending=null;
+   cloud.lastAt=Date.now();
+   window.oddOneOutBackend.saveCloudRoom(cloud.created,snap).catch(e=>console.warn('[Odd One Out] Cloud save failed:',e.message));
+ }
+ window.oooCloud={
+   hostStart(roomCode,snap){
+     cloud.active=roomCode;cloud.created=null;cloud.lastStr='';cloud.pending=null;
+     return (async()=>{
+       if(!(await whenConnected(90000))||cloud.active!==roomCode)return false;
+       const B=window.oddOneOutBackend;
+       try{await B.createCloudRoom(roomCode,snap,false)}
+       catch(e){try{await B.saveCloudRoom(roomCode,snap)}catch(e2){console.warn('[Odd One Out] Cloud room not created:',e2.message);return false}}
+       if(cloud.active!==roomCode)return false;
+       cloud.created=roomCode;cloud.lastStr=JSON.stringify([snap.state,snap.cfg]);cloud.lastAt=Date.now();
+       return true;
+     })();
+   },
+   save(roomCode,snap){
+     if(cloud.created!==roomCode||!snap)return;
+     const str=JSON.stringify([snap.state,snap.cfg]);if(str===cloud.lastStr)return;
+     cloud.lastStr=str;cloud.pending=snap;
+     if(cloud.timer)return;
+     const delay=Math.max(0,5000-(Date.now()-cloud.lastAt));
+     cloud.timer=setTimeout(flushSave,delay);
+   },
+   join(roomCode){
+     cloud.active=roomCode;
+     return (async()=>{
+       if(!(await whenConnected(60000)))return false;
+       try{await window.oddOneOutBackend.joinCloudRoom(roomCode);return true}
+       catch(e){console.warn('[Odd One Out] Cloud join skipped:',e.message);return false}
+     })();
+   },
+   async recover(roomCode){
+     if(!(await whenConnected(15000)))return null;
+     try{const r=await window.oddOneOutBackend.joinCloudRoom(roomCode);cloud.active=roomCode;return normSnap(r)}
+     catch(e){return null}
+   }
+ };
+ window.addEventListener('ooo-backend-status',ev=>{
+   if(ev.detail&&ev.detail.connected){
+     // After a reconnect the server forgets our socket room membership: re-subscribe.
+     if(cloud.wasConnected&&cloud.active){window.oddOneOutBackend.joinCloudRoom(cloud.active).catch(()=>{})}
+     cloud.wasConnected=true;
+   }
+ });
+ window.addEventListener('ooo-backend-auth-ready',ev=>{cloud.profile=(ev.detail&&ev.detail.profile)||null;cloud.userId=(ev.detail&&ev.detail.user&&ev.detail.user.id)||(cloud.profile&&cloud.profile.id)||null;mountFriendsButton()});
+
+ // ---------- Friends + invites UI ----------
+ const css=document.createElement('style');
+ css.textContent='#ooo-friends-btn{position:fixed;z-index:900;right:12px;bottom:calc(14px + env(safe-area-inset-bottom,0px));width:auto;padding:11px 15px;border-radius:999px;font-size:14px}body:has(#voice-dock.voice-visible) #ooo-friends-btn{bottom:calc(min(36vh,300px) + 14px)}#ooo-friends-btn i{font-style:normal;background:#e63a5c;color:#fff;border-radius:999px;padding:1px 7px;margin-left:6px;font-size:12px}.ooo-row{display:flex;align-items:center;gap:8px;margin:8px 0}.ooo-row .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:700}.ooo-row button{width:auto;padding:8px 11px;font-size:12px}.ooo-dot{width:9px;height:9px;border-radius:50%;background:#6b7c83;flex:none}.ooo-dot.on{background:#55e6a5}.ooo-toast{position:fixed;z-index:1100;left:50%;top:calc(14px + env(safe-area-inset-top,0px));transform:translateX(-50%);max-width:92vw;padding:10px 16px;border-radius:14px;background:#171c2a;color:#fff;font-weight:800;box-shadow:0 8px 28px #0008}.ooo-sec{margin:14px 0 4px;color:var(--mu);font-size:12px;font-weight:800;letter-spacing:.06em;text-transform:uppercase}';
+ document.head.appendChild(css);
+ const mk=(tag,cls,text)=>{const n=document.createElement(tag);if(cls)n.className=cls;if(text!=null)n.textContent=text;return n};
+ function toast(text){const t=mk('div','ooo-toast',text);document.body.appendChild(t);setTimeout(()=>t.remove(),4500)}
+ const presence=new Map(), names={};
+ const label=u=>u?(u.username?'@'+u.username:(u.display_name||'Player')):'Player';
+ // Accepts the new server shape ({friends,incoming,outgoing}) and the old one (one mixed friendships array).
+ function splitFriends(d){
+   if(d&&Array.isArray(d.incoming))return{friends:d.friends||[],incoming:d.incoming,outgoing:d.outgoing||[]};
+   const out={friends:[],incoming:[],outgoing:[]};
+   (d&&Array.isArray(d.friends)?d.friends:[]).forEach(r=>{
+     const mine=r.requester_id===cloud.userId,o=(mine?r.addressee:r.requester)||{};
+     const v={id:r.id,status:r.status,user:{id:mine?r.addressee_id:r.requester_id,username:o.username,display_name:o.display_name}};
+     if(r.status==='accepted')out.friends.push(v);else if(r.status==='pending')(mine?out.outgoing:out.incoming).push(v);
+   });
+   return out;
+ }
+ let friendsOpen=false,friendsMsg='';
+ function mountFriendsButton(){
+   if(document.getElementById('ooo-friends-btn'))return;
+   const b=mk('button','','👥 Friends');b.id='ooo-friends-btn';b.onclick=()=>{friendsOpen=true;friendsMsg='';renderFriends()};document.body.appendChild(b);
+   updateBadge();
+   if(cloud.profile&&!cloud.profile.username)toast('Set a username in 👥 Friends so friends can find you');
+   window.oddOneOutBackend.friends().then(d=>{cloud.pendingRequests=splitFriends(d).incoming.length;updateBadge()}).catch(()=>{});
+ }
+ function updateBadge(){const b=document.getElementById('ooo-friends-btn');if(!b)return;b.textContent='👥 Friends';if(cloud.pendingRequests>0){b.appendChild(mk('i','',String(cloud.pendingRequests)))}}
+ async function renderFriends(){
+   const old=document.querySelector('.ooo-friends-overlay');if(old)old.remove();if(!friendsOpen)return;
+   const ov=mk('div','score-overlay ooo-friends-overlay');ov.onclick=e=>{if(e.target===ov){friendsOpen=false;ov.remove()}};
+   const modal=mk('div','score-modal'),head=mk('div','score-head');head.append(mk('div','score-title','👥 Friends'));
+   const close=mk('button','score-close','✕');close.onclick=()=>{friendsOpen=false;ov.remove()};head.append(close);modal.append(head);
+   const B=window.oddOneOutBackend;
+   if(cloud.profile&&cloud.profile.username){modal.append(mk('p','score-sub','Your username: @'+cloud.profile.username))}
+   else{
+     modal.append(mk('div','ooo-sec','Choose your username'));
+     const r0=mk('div','two'),u0=mk('input');u0.placeholder='letters, numbers, _';u0.maxLength=20;u0.autocapitalize='none';const sv=mk('button','','Save');
+     sv.onclick=async()=>{const v=u0.value.trim();if(!v)return;sv.disabled=true;try{const r=await B.api('/api/username',{method:'POST',body:JSON.stringify({username:v})});cloud.profile=r.profile;friendsMsg='Username saved: @'+r.profile.username}catch(e){friendsMsg=e.message}renderFriends()};
+     r0.append(u0,sv);modal.append(r0);
+   }
+   modal.append(mk('div','ooo-sec','Add a friend'));
+   const add=mk('div','two'),inp=mk('input');inp.placeholder='Friend username';inp.maxLength=32;inp.autocapitalize='none';const send=mk('button','alt','Add');
+   send.onclick=async()=>{const u=inp.value.trim();if(!u)return;send.disabled=true;try{await B.requestFriend(u);friendsMsg='Request sent to '+u;inp.value=''}catch(e){friendsMsg=e.message}renderFriends()};
+   add.append(inp,send);modal.append(add);
+   if(friendsMsg)modal.append(mk('p','note',friendsMsg));
+   const body=mk('div');modal.append(body);ov.append(modal);document.body.appendChild(ov);
+   body.append(mk('p','note','Loading...'));
+   try{
+     const {friends,incoming,outgoing}=splitFriends(await B.friends());
+     if(!friendsOpen)return;body.replaceChildren();
+     [...friends,...incoming,...outgoing].forEach(f=>{if(f.user&&f.user.id)names[f.user.id]=label(f.user)});
+     cloud.pendingRequests=incoming.length;updateBadge();
+     if(incoming.length){body.append(mk('div','ooo-sec','Requests'));incoming.forEach(r=>{
+       const row=mk('div','ooo-row');row.append(mk('span','nm',label(r.user)));
+       const ok=mk('button','','Accept'),no=mk('button','alt','Decline');
+       const answer=async yes=>{ok.disabled=no.disabled=true;try{await B.respondFriend(r.id,yes);friendsMsg=yes?'Friend added':'Request declined'}catch(e){friendsMsg=e.message}renderFriends()};
+       ok.onclick=()=>answer(true);no.onclick=()=>answer(false);row.append(ok,no);body.append(row)})}
+     body.append(mk('div','ooo-sec','Friends'));
+     if(!friends.length)body.append(mk('p','note','No friends yet. Add someone by username.'));
+     friends.forEach(f=>{
+       const isOn=presence.has(f.user.id)?presence.get(f.user.id):!!f.online;
+       const row=mk('div','ooo-row'),dot=mk('span','ooo-dot'+(isOn?' on':''));
+       row.append(dot,mk('span','nm',label(f.user)));
+       const inv=mk('button','alt','Invite');
+       inv.onclick=async()=>{
+         if(!code||ph==='join'){friendsMsg='Create or join a room first, then invite.';return renderFriends()}
+         inv.disabled=true;try{await B.inviteFriend(f.user.id,code);friendsMsg='Invite sent to '+label(f.user)}catch(e){friendsMsg=e.message}renderFriends()};
+       row.append(inv);body.append(row)});
+     if(outgoing.length){body.append(mk('div','ooo-sec','Sent requests'));outgoing.forEach(r=>{const row=mk('div','ooo-row');row.append(mk('span','nm',label(r.user)),mk('span','note','Pending'));body.append(row)})}
+   }catch(e){body.replaceChildren(mk('p','note',e.message))}
+ }
+ window.addEventListener('ooo-friend-request',()=>{cloud.pendingRequests++;updateBadge();toast('👥 New friend request');if(friendsOpen)renderFriends()});
+ window.addEventListener('ooo-presence-changed',ev=>{const d=ev.detail||{};if(d.userId)presence.set(d.userId,!!d.online);if(friendsOpen)renderFriends()});
+ window.addEventListener('ooo-friend-invite',async ev=>{
+   const d=ev.detail||{},rc=String(d.roomCode||'').toLowerCase().replace(/[^a-z0-9]/g,'');if(!rc)return;
+   if(d.from&&!names[d.from]){try{const s=splitFriends(await window.oddOneOutBackend.friends());s.friends.forEach(f=>{names[f.user.id]=label(f.user)})}catch(e){}}
+   const who=names[d.from]||'A friend',inRoom=typeof ph!=='undefined'&&ph!=='join';
+   if(!confirm(who+' invited you to room '+rc.toUpperCase()+'. Join?'+(inRoom?' You will leave your current room.':'')))return;
+   inCode=rc;
+   if(!me.name.trim()){msg='Pehle apna naam likho';ph='join';return render()}
+   saveProfile();connecting=true;ph='join';render();joinRoom(rc);
+ });
+
  async function start(){
    try{
      await Promise.all([
