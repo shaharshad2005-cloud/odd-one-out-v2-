@@ -290,7 +290,7 @@ let H=null,lastMafiaResultMessage='';let backupTimer=null;let lobbyReady={host:t
 let scoreboardData={players:[],rounds:0},scoreboardOpen=false,hostMenuOpen=false;
 let nameHuntChat=[],nameHuntMainChat=[],lobbyConfig={mode:'odd'};
 // Live voice chat: direct, one-way WebRTC audio streams between room members.
-let voiceRoomAllowed=true,voiceStream=null,voiceEnabled=false,voiceTalking=false,voiceCalls={},voiceIncoming={},voiceAudio={},voiceMuted={},voiceMicStates={},voiceGlobalMuted={},voiceStatus='Microphone is off.';
+let voiceRoomAllowed=true,translateMode='off',deadQuickAt=0,voiceStream=null,voiceEnabled=false,voiceTalking=false,voiceCalls={},voiceIncoming={},voiceAudio={},voiceMuted={},voiceMicStates={},voiceGlobalMuted={},voiceStatus='Microphone is off.';
 
 
 // ---------- live voice chat ----------
