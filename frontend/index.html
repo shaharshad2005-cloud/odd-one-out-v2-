@@ -1016,4 +1016,71 @@ function rResult(){
 render();
 setTimeout(()=>{let room=null;try{room=JSON.parse(localStorage.getItem(ROOM_KEY)||'null')}catch(e){}if(!room||!room.code)return;if(room.role==='host'){let backup=null;try{backup=JSON.parse(localStorage.getItem(HOST_KEY)||'null')}catch(e){}if(backup&&backup.code===room.code&&confirm('Restore your previous host room? The saved room state and scores will be loaded.')){me.name=room.name||me.name;selectedAvatar=room.avatar||selectedAvatar;playerToken=room.token||playerToken;connecting=true;ph='join';render();hostRoom(0,backup);}}else if(confirm('Rejoin your previous room '+String(room.code).toUpperCase()+'?')){me.name=room.name||me.name;selectedAvatar=room.avatar||selectedAvatar;playerToken=room.token||playerToken;inCode=room.code;connecting=true;ph='join';render();joinRoom(room.code);}},500);
 window.addEventListener('beforeunload',e=>{if(isHost&&H&&Object.keys(H.players||{}).length>1){e.preventDefault();e.returnValue='The host room will close if you leave. Are you sure?';return e.returnValue;}});
+</script>
+<!-- Supabase guest authentication + Socket.IO connection layer. Existing PeerJS gameplay is preserved. -->
+<script>
+(()=>{
+ const SUPABASE_URL='https://waxhxzfmcjlcxxlwwsxz.supabase.co';
+ const SUPABASE_PUBLISHABLE_KEY='sb_publishable_LgvvRJx_kLxIdpKYMJsafQ_ZBKoWX5p';
+ const BACKEND_URL='https://odd-one-out-v2.onrender.com';
+ let supabaseClient=null, socket=null, session=null, reconnecting=false;
+ const load=(src)=>new Promise((resolve,reject)=>{const x=document.createElement('script');x.src=src;x.onload=resolve;x.onerror=()=>reject(new Error('Could not load '+src));document.head.appendChild(x)});
+ async function api(path, options={}){
+   if(!session?.access_token) throw new Error('Guest session is not ready yet.');
+   const response=await fetch(BACKEND_URL+path,{...options,headers:{'Content-Type':'application/json','Authorization':'Bearer '+session.access_token,...(options.headers||{})}});
+   const data=await response.json().catch(()=>({}));
+   if(!response.ok) throw new Error(data.error||('Backend request failed ('+response.status+')'));
+   return data;
+ }
+ function connectSocket(){
+   if(!session?.access_token||!window.io)return;
+   if(socket){try{socket.disconnect()}catch(e){}}
+   socket=window.io(BACKEND_URL,{transports:['websocket','polling'],auth:{accessToken:session.access_token},reconnection:true,reconnectionAttempts:Infinity,reconnectionDelay:1000,reconnectionDelayMax:10000,timeout:20000});
+   socket.on('connect',()=>{console.info('[Odd One Out] Backend socket connected.');window.dispatchEvent(new CustomEvent('ooo-backend-status',{detail:{connected:true}}))});
+   socket.on('disconnect',reason=>{console.warn('[Odd One Out] Backend socket disconnected:',reason);window.dispatchEvent(new CustomEvent('ooo-backend-status',{detail:{connected:false,reason}}))});
+   socket.on('connect_error',err=>{console.error('[Odd One Out] Backend connection error:',err.message);window.dispatchEvent(new CustomEvent('ooo-backend-error',{detail:{message:err.message}}))});
+   socket.on('friend:request',payload=>window.dispatchEvent(new CustomEvent('ooo-friend-request',{detail:payload})));
+   socket.on('friend:invite',payload=>window.dispatchEvent(new CustomEvent('ooo-friend-invite',{detail:payload})));
+   socket.on('presence:changed',payload=>window.dispatchEvent(new CustomEvent('ooo-presence-changed',{detail:payload})));
+   socket.on('room:host-changed',payload=>window.dispatchEvent(new CustomEvent('ooo-host-changed',{detail:payload})));
+   window.oddOneOutBackend.socket=socket;
+ }
+ async function start(){
+   try{
+     await Promise.all([
+       load('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js'),
+       load('https://cdn.jsdelivr.net/npm/socket.io-client@4.8.1/dist/socket.io.min.js')
+     ]);
+     if(!window.supabase?.createClient)throw new Error('Supabase client library did not load.');
+     supabaseClient=window.supabase.createClient(SUPABASE_URL,SUPABASE_PUBLISHABLE_KEY,{auth:{persistSession:true,autoRefreshToken:true,detectSessionInUrl:true}});
+     window.oddOneOutBackend={client:supabaseClient,socket:null,getSession:()=>session,api,
+       friends:()=>api('/api/friends'),
+       requestFriend:username=>api('/api/friends/request',{method:'POST',body:JSON.stringify({username})}),
+       respondFriend:(requestId,accept)=>api('/api/friends/respond',{method:'POST',body:JSON.stringify({requestId,accept})}),
+       inviteFriend:(friendId,roomCode)=>new Promise((resolve,reject)=>{if(!socket?.connected)return reject(new Error('Backend socket is not connected.'));socket.emit('friend:invite',{friendId,roomCode},r=>r?.ok?resolve(r):reject(new Error(r?.error||'Invite failed.')))}),
+       createCloudRoom:(code,snapshot,isPrivate=false)=>new Promise((resolve,reject)=>{if(!socket?.connected)return reject(new Error('Backend socket is not connected.'));socket.emit('room:create',{code,snapshot,isPrivate},r=>r?.ok?resolve(r):reject(new Error(r?.error||'Room creation failed.')))}),
+       joinCloudRoom:code=>new Promise((resolve,reject)=>{if(!socket?.connected)return reject(new Error('Backend socket is not connected.'));socket.emit('room:join',{code},r=>r?.ok?resolve(r):reject(new Error(r?.error||'Room join failed.')))}),
+       saveCloudRoom:(code,snapshot)=>new Promise((resolve,reject)=>{if(!socket?.connected)return reject(new Error('Backend socket is not connected.'));socket.emit('room:save',{code,snapshot},r=>r?.ok?resolve(r):reject(new Error(r?.error||'Room save failed.')))})
+     };
+     const {data,error}=await supabaseClient.auth.getSession();if(error)throw error;
+     session=data.session;
+     if(!session){
+       const guest=await supabaseClient.auth.signInAnonymously();
+       if(guest.error)throw guest.error;
+       session=guest.data.session;
+     }
+     if(!session?.access_token)throw new Error('Supabase did not return an access token.');
+     const me=await api('/api/me');
+     console.info('[Odd One Out] Guest authentication ready:',me.profile?.display_name||'Guest');
+     connectSocket();
+     supabaseClient.auth.onAuthStateChange((_event,newSession)=>{session=newSession;if(session?.access_token)connectSocket();else if(socket){socket.disconnect();socket=null}});
+     window.dispatchEvent(new CustomEvent('ooo-backend-auth-ready',{detail:{user:me.user,profile:me.profile}}));
+   }catch(err){
+     console.error('[Odd One Out] Backend setup failed:',err.message);
+     window.dispatchEvent(new CustomEvent('ooo-backend-error',{detail:{message:err.message}}));
+   }
+ }
+ window.addEventListener('online',()=>{if(session?.access_token&&!socket?.connected)connectSocket()});
+ if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
+})();
 </script></body></html>
