@@ -38,8 +38,11 @@ async function saveRoom(code, patch) {
   return data;
 }
 async function profile(user) {
-  const { data, error } = await supabase.from('profiles').upsert({ id: user.id, display_name: user.user_metadata?.display_name || user.email?.split('@')[0] || 'Guest', avatar: user.user_metadata?.avatar || 'none', updated_at: new Date().toISOString() }).select().single();
+  // Create the profile once; never overwrite a saved username/display name on later calls.
+  const { error } = await supabase.from('profiles').upsert({ id: user.id, display_name: user.user_metadata?.display_name || user.email?.split('@')[0] || 'Guest', avatar: user.user_metadata?.avatar || 'none' }, { onConflict: 'id', ignoreDuplicates: true });
   if (error) throw error;
+  const { data, error: e2 } = await supabase.from('profiles').select('*').eq('id', user.id).single();
+  if (e2) throw e2;
   return data;
 }
 
@@ -51,16 +54,33 @@ app.get('/api/me', async (req, res) => {
 app.get('/api/friends', async (req, res) => {
   try {
     const user = await authUser(req.headers.authorization?.replace(/^Bearer\s+/i, ''));
-    const { data, error } = await supabase.from('friendships').select('id,requester_id,addressee_id,status,created_at,requester:profiles!friendships_requester_id_fkey(id,display_name,avatar),addressee:profiles!friendships_addressee_id_fkey(id,display_name,avatar)').or(`requester_id.eq.${user.id},addressee_id.eq.${user.id}`).order('created_at', { ascending: false });
-    if (error) throw error; res.json({ friends: data || [] });
+    const { data, error } = await supabase.from('friendships').select('id,requester_id,addressee_id,status,created_at,requester:profiles!friendships_requester_id_fkey(id,username,display_name,avatar),addressee:profiles!friendships_addressee_id_fkey(id,username,display_name,avatar)').or(`requester_id.eq.${user.id},addressee_id.eq.${user.id}`).order('created_at', { ascending: false });
+    if (error) throw error;
+    const view = r => {
+      const mine = r.requester_id === user.id; const other = (mine ? r.addressee : r.requester) || {}; const otherId = mine ? r.addressee_id : r.requester_id;
+      return { id: r.id, status: r.status, direction: mine ? 'outgoing' : 'incoming', created_at: r.created_at, user: { id: otherId, username: other.username || null, display_name: other.display_name || 'Player', avatar: other.avatar || 'none' }, online: online.has(otherId) };
+    };
+    const rows = (data || []).map(view);
+    res.json({ friends: rows.filter(r => r.status === 'accepted'), incoming: rows.filter(r => r.status === 'pending' && r.direction === 'incoming'), outgoing: rows.filter(r => r.status === 'pending' && r.direction === 'outgoing') });
   } catch (e) { res.status(401).json({ error: e.message }); }
+});
+app.post('/api/username', async (req, res) => {
+  try {
+    const user = await authUser(req.headers.authorization?.replace(/^Bearer\s+/i, ''));
+    const name = String(req.body?.username || '').trim().replace(/^@/, '').toLowerCase();
+    if (!/^[a-z0-9_]{3,20}$/.test(name)) throw fail('Username must be 3-20 letters, numbers or underscores.');
+    await profile(user);
+    const { data, error } = await supabase.from('profiles').update({ username: name, display_name: name, updated_at: new Date().toISOString() }).eq('id', user.id).select().single();
+    if (error) { if (error.code === '23505') throw fail('That username is already taken.'); throw error; }
+    res.json({ profile: data });
+  } catch (e) { res.status(400).json({ error: e.message }); }
 });
 app.post('/api/friends/request', async (req, res) => {
   try {
     const user = await authUser(req.headers.authorization?.replace(/^Bearer\s+/i, ''));
     const target = String(req.body?.username || '').trim().replace(/^@/, '').slice(0, 32);
     if (!target) throw fail('Enter a username.');
-    const { data: p, error: pe } = await supabase.from('profiles').select('id,username,display_name').ilike('username', target).maybeSingle();
+    const { data: p, error: pe } = await supabase.from('profiles').select('id,username,display_name').eq('username', target.toLowerCase()).maybeSingle();
     if (pe) throw pe; if (!p || p.id === user.id) throw fail('Player not found.');
     const [a,b] = [user.id,p.id].sort();
     const { data: existing, error: ee } = await supabase.from('friendships').select('id,status').eq('pair_key', `${a}:${b}`).maybeSingle();
@@ -111,7 +131,7 @@ io.on('connection', async socket => {
     try {
       code = safeCode(code); const room = await roomRow(code); if (!room || room.status !== 'active') throw fail('Room not found or expired.');
       if (room.is_private && room.host_user_id !== user.id) throw fail('This is a private room. Join through a friend invitation.');
-      socket.join(`room:${code}`); ack({ ok: true, state: room.state, hostUserId: room.host_user_id, updatedAt: room.updated_at });
+      socket.join(`room:${code}`); ack({ ok: true, state: room.host_user_id === user.id ? room.state : null, hostUserId: room.host_user_id, updatedAt: room.updated_at });
     } catch (e) { ack({ ok: false, error: e.message }); }
   });
   socket.on('room:save', async ({ code, snapshot } = {}, ack = () => {}) => {
@@ -123,7 +143,7 @@ io.on('connection', async socket => {
     } catch (e) { ack({ ok: false, error: e.message }); }
   });
   socket.on('room:heartbeat', async ({ code } = {}, ack = () => {}) => {
-    try { code = safeCode(code); const room = await roomRow(code); if (!room) throw fail('Room not found.'); await saveRoom(code, { heartbeat_at: new Date().toISOString() }); ack({ ok: true }); }
+    try { code = safeCode(code); const room = await roomRow(code); if (!room) throw fail('Room not found.'); if (room.host_user_id !== user.id) throw fail('Only the current host can send a room heartbeat.', 'FORBIDDEN'); await saveRoom(code, { heartbeat_at: new Date().toISOString() }); ack({ ok: true }); }
     catch (e) { ack({ ok: false, error: e.message }); }
   });
   socket.on('room:transfer-host', async ({ code, nextHostUserId } = {}, ack = () => {}) => {
