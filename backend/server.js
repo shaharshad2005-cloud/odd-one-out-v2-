@@ -5,7 +5,7 @@ import http from 'node:http';
 import { Server } from 'socket.io';
 import { createClient } from '@supabase/supabase-js';
 
-const required = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
+const required = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY']; // SUPABASE_ANON_KEY is not used by this server
 for (const key of required) if (!process.env[key]) throw new Error(`Missing ${key}; copy .env.example to .env and configure Supabase.`);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const app = express();
@@ -19,6 +19,8 @@ const online = new Map(); // userId -> socketId; presence is ephemeral, not auth
 const roomTimers = new Map();
 const GRACE_MS = 120_000;
 const safeCode = v => String(v || '').toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 8);
+const isUuid = v => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(v || ''));
+const ROOM_STALE_MS = 12 * 60 * 60 * 1000;
 const fail = (message, code = 'BAD_REQUEST') => Object.assign(new Error(message), { data: { code, message } });
 
 async function authUser(token) {
@@ -111,7 +113,7 @@ io.on('connection', async socket => {
 
   socket.on('friend:invite', async ({ friendId, roomCode } = {}, ack = () => {}) => {
     try {
-      const code = safeCode(roomCode); if (!code || !friendId) throw fail('Friend and room code are required.');
+      const code = safeCode(roomCode); if (!code || !isUuid(friendId)) throw fail('Friend and room code are required.');
       const { data, error } = await supabase.from('friendships').select('id').eq('status','accepted').or(`and(requester_id.eq.${user.id},addressee_id.eq.${friendId}),and(requester_id.eq.${friendId},addressee_id.eq.${user.id})`).maybeSingle();
       if (error) throw error; if (!data) throw fail('You can invite accepted friends only.');
       const sid = online.get(friendId); if (!sid) throw fail('Your friend is offline.');
@@ -123,15 +125,18 @@ io.on('connection', async socket => {
     try {
       code = safeCode(code); if (code.length < 4) throw fail('Room code must contain at least 4 letters or numbers.');
       const clean = snapshot && typeof snapshot === 'object' ? snapshot : {};
+      const cutoff = new Date(Date.now() - ROOM_STALE_MS).toISOString();
+      await supabase.from('game_rooms').delete().eq('code', code).or(`host_user_id.eq.${user.id},heartbeat_at.lt.${cutoff},status.neq.active`);
       const { data, error } = await supabase.from('game_rooms').insert({ code, host_user_id: user.id, state: clean, is_private: !!isPrivate, status: 'active', heartbeat_at: new Date().toISOString() }).select().single();
-      if (error) throw error; socket.join(`room:${code}`); ack({ ok: true, room: data });
+      if (error) { if (error.code === '23505') throw fail('That room code is already in use.'); throw error; }
+      socket.join(`room:${code}`); ack({ ok: true, room: { code: data.code, is_private: data.is_private, status: data.status } });
     } catch (e) { ack({ ok: false, error: e.message }); }
   });
   socket.on('room:join', async ({ code } = {}, ack = () => {}) => {
     try {
       code = safeCode(code); const room = await roomRow(code); if (!room || room.status !== 'active') throw fail('Room not found or expired.');
       if (room.is_private && room.host_user_id !== user.id) throw fail('This is a private room. Join through a friend invitation.');
-      socket.join(`room:${code}`); ack({ ok: true, state: room.host_user_id === user.id ? room.state : null, hostUserId: room.host_user_id, updatedAt: room.updated_at });
+      socket.join(`room:${code}`); const isHostUser = room.host_user_id === user.id; ack({ ok: true, ...(isHostUser ? { state: room.state } : {}), hostUserId: room.host_user_id, updatedAt: room.updated_at });
     } catch (e) { ack({ ok: false, error: e.message }); }
   });
   socket.on('room:save', async ({ code, snapshot } = {}, ack = () => {}) => {
@@ -143,12 +148,12 @@ io.on('connection', async socket => {
     } catch (e) { ack({ ok: false, error: e.message }); }
   });
   socket.on('room:heartbeat', async ({ code } = {}, ack = () => {}) => {
-    try { code = safeCode(code); const room = await roomRow(code); if (!room) throw fail('Room not found.'); if (room.host_user_id !== user.id) throw fail('Only the current host can send a room heartbeat.', 'FORBIDDEN'); await saveRoom(code, { heartbeat_at: new Date().toISOString() }); ack({ ok: true }); }
+    try { code = safeCode(code); const room = await roomRow(code); if (!room) throw fail('Room not found.'); await saveRoom(code, { heartbeat_at: new Date().toISOString() }); ack({ ok: true }); }
     catch (e) { ack({ ok: false, error: e.message }); }
   });
   socket.on('room:transfer-host', async ({ code, nextHostUserId } = {}, ack = () => {}) => {
     try {
-      code = safeCode(code); const room = await roomRow(code); if (!room || room.host_user_id !== user.id) throw fail('Only the current host can transfer host control.');
+      code = safeCode(code); if (!isUuid(nextHostUserId)) throw fail('Invalid new host.'); const room = await roomRow(code); if (!room || room.host_user_id !== user.id) throw fail('Only the current host can transfer host control.');
       const { data: friendship, error } = await supabase.from('friendships').select('id').eq('status','accepted').or(`and(requester_id.eq.${user.id},addressee_id.eq.${nextHostUserId}),and(requester_id.eq.${nextHostUserId},addressee_id.eq.${user.id})`).maybeSingle();
       if (error) throw error; if (!friendship) throw fail('New host must be an accepted friend.');
       await saveRoom(code, { host_user_id: nextHostUserId }); io.to(`room:${code}`).emit('room:host-changed', { hostUserId: nextHostUserId }); ack({ ok: true });
@@ -158,6 +163,12 @@ io.on('connection', async socket => {
     if (online.get(user.id) === socket.id) { online.delete(user.id); socket.broadcast.emit('presence:changed', { userId: user.id, online: false, graceMs: GRACE_MS }); }
   });
 });
+
+process.on('unhandledRejection', e => console.error('Unhandled rejection:', e));
+process.on('uncaughtException', e => console.error('Uncaught exception:', e));
+setInterval(async () => {
+  try { await supabase.from('game_rooms').delete().lt('heartbeat_at', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()); } catch (e) { console.error('Room cleanup failed:', e.message); }
+}, 60 * 60 * 1000).unref();
 
 const port = Number(process.env.PORT || 3000);
 server.listen(port, () => console.log(`Odd One Out backend listening on :${port}`));
