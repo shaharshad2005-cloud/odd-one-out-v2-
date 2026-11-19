@@ -1025,7 +1025,8 @@ window.addEventListener('beforeunload',e=>{if(isHost&&H&&Object.keys(H.players||
  const SUPABASE_PUBLISHABLE_KEY='sb_publishable_LgvvRJx_kLxIdpKYMJsafQ_ZBKoWX5p';
  const BACKEND_URL='https://odd-one-out-v2.onrender.com';
  let supabaseClient=null, socket=null, session=null, reconnecting=false;
- const load=(src)=>new Promise((resolve,reject)=>{const x=document.createElement('script');x.src=src;x.onload=resolve;x.onerror=()=>reject(new Error('Could not load '+src));document.head.appendChild(x)});
+ const loaded={};
+ const load=(src)=>loaded[src]||(loaded[src]=new Promise((resolve,reject)=>{const x=document.createElement('script');x.src=src;x.onload=resolve;x.onerror=()=>{delete loaded[src];reject(new Error('Could not load '+src))};document.head.appendChild(x)}));
  async function api(path, options={}){
    if(!session?.access_token) throw new Error('Guest session is not ready yet.');
    const response=await fetch(BACKEND_URL+path,{...options,headers:{'Content-Type':'application/json','Authorization':'Bearer '+session.access_token,...(options.headers||{})}});
@@ -1060,7 +1061,7 @@ window.addEventListener('beforeunload',e=>{if(isHost&&H&&Object.keys(H.players||
    hostStart(roomCode,snap){
      cloud.active=roomCode;cloud.created=null;cloud.lastStr='';cloud.pending=null;
      return (async()=>{
-       if(!(await whenConnected(90000))||cloud.active!==roomCode)return false;
+       if(!(await whenConnected(180000))||cloud.active!==roomCode)return false;
        const B=window.oddOneOutBackend;
        try{await B.createCloudRoom(roomCode,snap,false)}
        catch(e){try{await B.saveCloudRoom(roomCode,snap)}catch(e2){console.warn('[Odd One Out] Cloud room not created:',e2.message);return false}}
@@ -1098,7 +1099,8 @@ window.addEventListener('beforeunload',e=>{if(isHost&&H&&Object.keys(H.players||
      cloud.wasConnected=true;
    }
  });
- window.addEventListener('ooo-backend-auth-ready',ev=>{cloud.profile=(ev.detail&&ev.detail.profile)||null;cloud.userId=(ev.detail&&ev.detail.user&&ev.detail.user.id)||(cloud.profile&&cloud.profile.id)||null;mountFriendsButton()});
+ window.addEventListener('ooo-backend-auth-ready',ev=>{cloud.profile=(ev.detail&&ev.detail.profile)||null;cloud.userId=(ev.detail&&ev.detail.user&&ev.detail.user.id)||(cloud.profile&&cloud.profile.id)||null;mountFriendsButton();onBackendReady()});
+ window.addEventListener('ooo-backend-error',()=>{if(friendsOpen)renderFriends()});
 
  // ---------- Friends + invites UI ----------
  const css=document.createElement('style');
@@ -1124,8 +1126,19 @@ window.addEventListener('beforeunload',e=>{if(isHost&&H&&Object.keys(H.players||
    if(document.getElementById('ooo-friends-btn'))return;
    const b=mk('button','','👥 Friends');b.id='ooo-friends-btn';b.onclick=()=>{friendsOpen=true;friendsMsg='';renderFriends()};document.body.appendChild(b);
    updateBadge();
+ }
+ function onBackendReady(){
    if(cloud.profile&&!cloud.profile.username)toast('Set a username in 👥 Friends so friends can find you');
    window.oddOneOutBackend.friends().then(d=>{cloud.pendingRequests=splitFriends(d).incoming.length;updateBadge()}).catch(()=>{});
+   if(friendsOpen)renderFriends();
+ }
+ function friendlyErr(m){
+   m=String(m||'');
+   if(/failed to fetch|networkerror|load failed|network request/i.test(m))return "Can't reach the game server. It may be waking up (free hosting) - wait a minute, then tap Retry.";
+   if(/anonymous/i.test(m))return 'Guest sign-in is turned off in Supabase. Turn on "Allow anonymous sign-ins" under Authentication in the Supabase dashboard.';
+   if(/could not load/i.test(m))return "Couldn't load the login libraries. Check your internet connection, then tap Retry.";
+   if(/expired|sign in|session/i.test(m))return 'Your guest session has expired. Tap Retry to sign in again.';
+   return 'Connection problem: '+m;
  }
  function updateBadge(){const b=document.getElementById('ooo-friends-btn');if(!b)return;b.textContent='👥 Friends';if(cloud.pendingRequests>0){b.appendChild(mk('i','',String(cloud.pendingRequests)))}}
  async function renderFriends(){
@@ -1133,6 +1146,13 @@ window.addEventListener('beforeunload',e=>{if(isHost&&H&&Object.keys(H.players||
    const ov=mk('div','score-overlay ooo-friends-overlay');ov.onclick=e=>{if(e.target===ov){friendsOpen=false;ov.remove()}};
    const modal=mk('div','score-modal'),head=mk('div','score-head');head.append(mk('div','score-title','👥 Friends'));
    const close=mk('button','score-close','✕');close.onclick=()=>{friendsOpen=false;ov.remove()};head.append(close);modal.append(head);
+   const bs=window.oooBackendState||{status:'connecting'};
+   if(bs.status!=='ready'||!window.oddOneOutBackend||!window.oddOneOutBackend.friends){
+     const waiting=bs.status!=='error';
+     modal.append(mk('p','note',waiting?'Connecting to the server... the first connection can take up to a minute.':friendlyErr(bs.error)));
+     if(!waiting){const rb=mk('button','','Retry');rb.onclick=()=>{if(window.oooRetryBackend)window.oooRetryBackend();friendsMsg='';renderFriends()};modal.append(rb)}
+     ov.append(modal);document.body.appendChild(ov);return;
+   }
    const B=window.oddOneOutBackend;
    if(cloud.profile&&cloud.profile.username){modal.append(mk('p','score-sub','Your username: @'+cloud.profile.username))}
    else{
@@ -1172,6 +1192,7 @@ window.addEventListener('beforeunload',e=>{if(isHost&&H&&Object.keys(H.players||
      if(outgoing.length){body.append(mk('div','ooo-sec','Sent requests'));outgoing.forEach(r=>{const row=mk('div','ooo-row');row.append(mk('span','nm',label(r.user)),mk('span','note','Pending'));body.append(row)})}
    }catch(e){body.replaceChildren(mk('p','note',e.message))}
  }
+ if(document.body)mountFriendsButton();else document.addEventListener('DOMContentLoaded',mountFriendsButton,{once:true});
  setInterval(()=>{const b=document.getElementById('ooo-friends-btn');if(b)b.style.display=(typeof ph!=='undefined'&&(ph==='join'||ph==='lobby'))?'':'none'},400);
  window.addEventListener('ooo-friend-request',()=>{cloud.pendingRequests++;updateBadge();toast('👥 New friend request');if(friendsOpen)renderFriends()});
  window.addEventListener('ooo-presence-changed',ev=>{const d=ev.detail||{};if(d.userId)presence.set(d.userId,!!d.online);if(friendsOpen)renderFriends()});
@@ -1185,7 +1206,9 @@ window.addEventListener('beforeunload',e=>{if(isHost&&H&&Object.keys(H.players||
    saveProfile();connecting=true;ph='join';render();joinRoom(rc);
  });
 
+ let starting=false,retries=0;
  async function start(){
+   if(starting)return;starting=true;window.oooBackendState={status:'connecting',error:null};
    try{
      await Promise.all([
        load('https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js'),
@@ -1214,12 +1237,17 @@ window.addEventListener('beforeunload',e=>{if(isHost&&H&&Object.keys(H.players||
      console.info('[Odd One Out] Guest authentication ready:',me.profile?.display_name||'Guest');
      connectSocket();
      supabaseClient.auth.onAuthStateChange((_event,newSession)=>{session=newSession;if(session?.access_token)connectSocket();else if(socket){socket.disconnect();socket=null}});
+     window.oooBackendState={status:'ready',error:null};retries=0;
      window.dispatchEvent(new CustomEvent('ooo-backend-auth-ready',{detail:{user:me.user,profile:me.profile}}));
    }catch(err){
      console.error('[Odd One Out] Backend setup failed:',err.message);
+     window.oooBackendState={status:'error',error:err.message};
      window.dispatchEvent(new CustomEvent('ooo-backend-error',{detail:{message:err.message}}));
-   }
+     // Free hosting sleeps: keep trying quietly unless the problem is a setting that a retry cannot fix.
+     if(retries<6&&!/anonymous|disabled|not enabled/i.test(err.message)){retries++;setTimeout(start,Math.min(30000,6000*retries))}
+   }finally{starting=false}
  }
+ window.oooRetryBackend=()=>{retries=0;start()};
  window.addEventListener('online',()=>{if(session?.access_token&&!socket?.connected)connectSocket()});
  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start,{once:true});else start();
 })();
