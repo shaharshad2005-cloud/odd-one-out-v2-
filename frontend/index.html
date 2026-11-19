@@ -1172,6 +1172,7 @@ window.addEventListener('beforeunload',e=>{if(isHost&&H&&Object.keys(H.players||
      if(outgoing.length){body.append(mk('div','ooo-sec','Sent requests'));outgoing.forEach(r=>{const row=mk('div','ooo-row');row.append(mk('span','nm',label(r.user)),mk('span','note','Pending'));body.append(row)})}
    }catch(e){body.replaceChildren(mk('p','note',e.message))}
  }
+ setInterval(()=>{const b=document.getElementById('ooo-friends-btn');if(b)b.style.display=(typeof ph!=='undefined'&&(ph==='join'||ph==='lobby'))?'':'none'},400);
  window.addEventListener('ooo-friend-request',()=>{cloud.pendingRequests++;updateBadge();toast('👥 New friend request');if(friendsOpen)renderFriends()});
  window.addEventListener('ooo-presence-changed',ev=>{const d=ev.detail||{};if(d.userId)presence.set(d.userId,!!d.online);if(friendsOpen)renderFriends()});
  window.addEventListener('ooo-friend-invite',async ev=>{
