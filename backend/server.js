@@ -5,7 +5,7 @@ import http from 'node:http';
 import { Server } from 'socket.io';
 import { createClient } from '@supabase/supabase-js';
 
-const required = ['SUPABASE_URL', 'SUPABASE_ANON_KEY', 'SUPABASE_SERVICE_ROLE_KEY'];
+const required = ['SUPABASE_URL', 'SUPABASE_SERVICE_ROLE_KEY'];
 for (const key of required) if (!process.env[key]) throw new Error(`Missing ${key}; copy .env.example to .env and configure Supabase.`);
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } });
 const app = express();
